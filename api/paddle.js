@@ -14,9 +14,15 @@ export default async function handler(req, res) {
   }
 
   const { name, description, priceInCents } = req.body;
-  // تم التعديل هنا للاتصال بالسيرفر الحقيقي Live بدلاً من التجريبي
   const PADDLE_API_URL = process.env.PADDLE_API_URL || 'https://api.paddle.com';
-  const PADDLE_API_KEY = process.env.PADDLE_API_KEY;
+
+  // تنظيف المفتاح من أي مسافات، أقواس، أو كلمة Bearer زائدة
+  const rawKey = process.env.PADDLE_API_KEY || '';
+  const PADDLE_API_KEY = rawKey.replace(/['"]/g, '').replace(/^Bearer\s+/i, '').trim();
+
+  if (!PADDLE_API_KEY) {
+    return res.status(400).json({ error: 'مفتاح الدفع غير موجود في Vercel. يرجى التحقق من Environment Variables.' });
+  }
 
   try {
     const productRes = await fetch(`${PADDLE_API_URL}/products`, {
@@ -33,9 +39,8 @@ export default async function handler(req, res) {
     });
     const product = await productRes.json();
 
-    // نظام اصطياد الأخطاء الذكي من Paddle
     if (product.error) {
-       return res.status(400).json({ error: `مشكلة في Paddle: ${product.error.detail || product.error.message || 'خطأ غير معروف'}` });
+       return res.status(400).json({ error: `مشكلة من Paddle: ${product.error.detail || product.error.message || 'خطأ غير معروف'}` });
     }
 
     const priceRes = await fetch(`${PADDLE_API_URL}/prices`, {
