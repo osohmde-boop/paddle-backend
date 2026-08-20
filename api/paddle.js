@@ -1,5 +1,4 @@
 export default async function handler(req, res) {
-  // السماح لمتجر YZ Store بالاتصال بالسيرفر
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
@@ -15,7 +14,8 @@ export default async function handler(req, res) {
   }
 
   const { name, description, priceInCents } = req.body;
-  const PADDLE_API_URL = process.env.PADDLE_API_URL || 'https://sandbox-api.paddle.com';
+  // تم التعديل هنا للاتصال بالسيرفر الحقيقي Live بدلاً من التجريبي
+  const PADDLE_API_URL = process.env.PADDLE_API_URL || 'https://api.paddle.com';
   const PADDLE_API_KEY = process.env.PADDLE_API_KEY;
 
   try {
@@ -33,6 +33,11 @@ export default async function handler(req, res) {
     });
     const product = await productRes.json();
 
+    // نظام اصطياد الأخطاء الذكي من Paddle
+    if (product.error) {
+       return res.status(400).json({ error: `مشكلة في Paddle: ${product.error.detail || product.error.message || 'خطأ غير معروف'}` });
+    }
+
     const priceRes = await fetch(`${PADDLE_API_URL}/prices`, {
       method: 'POST',
       headers: {
@@ -49,6 +54,10 @@ export default async function handler(req, res) {
       })
     });
     const price = await priceRes.json();
+
+    if (price.error) {
+       return res.status(400).json({ error: `مشكلة في تسعير Paddle: ${price.error.detail || price.error.message}` });
+    }
 
     return res.status(200).json({
       success: true,
