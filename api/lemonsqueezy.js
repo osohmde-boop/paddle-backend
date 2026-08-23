@@ -28,6 +28,7 @@ export default async function handler(req, res) {
 
   try {
     const customPriceList = [];
+    let detectedVariantId = null;
 
     for (const cartItem of items) {
       const productId = typeof cartItem?.productId === 'string' ? cartItem.productId.trim() : '';
@@ -48,6 +49,11 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: `بيانات المنتج "${title}" غير صالحة.` });
       }
 
+      // القراءة من قواعد البيانات أو استخدام الرقم الافتراضي
+      if (product.variantId || product.variant_id) {
+        detectedVariantId = String(product.variantId || product.variant_id);
+      }
+
       customPriceList.push({
         name: title,
         price: Math.round(price * 100)
@@ -55,6 +61,9 @@ export default async function handler(req, res) {
     }
 
     const totalCustomPrice = customPriceList.reduce((acc, curr) => acc + curr.price, 0);
+
+    // استخدام الرقم المكتشف أو الرقم الافتراضي 2047899
+    const finalVariantId = detectedVariantId || "2047899";
 
     const checkoutPayload = {
       data: {
@@ -77,6 +86,12 @@ export default async function handler(req, res) {
             data: {
               type: "stores",
               id: String(LEMONSQUEEZY_STORE_ID)
+            }
+          },
+          variant: {
+            data: {
+              type: "variants",
+              id: String(finalVariantId)
             }
           }
         }
