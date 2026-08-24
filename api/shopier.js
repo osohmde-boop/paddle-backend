@@ -18,7 +18,7 @@ export default async function handler(req, res) {
     const exchangeRate = 36; 
     const priceInTRY = Math.round(totalAmount * exchangeRate * 100) / 100;
 
-    const response = add = await fetch('https://api.shopier.com/v1/products', {
+    const response = await fetch('https://api.shopier.com/v1/products', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${PAT}`,
@@ -31,7 +31,7 @@ export default async function handler(req, res) {
         currency: 'TRY',
         stock: 1,
         type: 'digital',
-        media: [{ url: 'https://i.ibb.co/YT1RPZdx/image.png', type: 'image' }] // إضافة نوع الوسائط
+        media: [{ url: 'https://i.ibb.co/YT1RPZdx/image.png', type: 'image' }]
       })
     });
 
