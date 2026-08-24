@@ -31,7 +31,7 @@ export default async function handler(req, res) {
         currency: 'TRY',
         stock: 1,
         type: 'digital',
-        media: ['https://i.ibb.co/YT1RPZdx/image.png'] // تحويل الـ media إلى مصفوفة (Array) كما يطلب Shopier
+        media: [{ url: 'https://i.ibb.co/YT1RPZdx/image.png' }] // جعل عنصر الـ media كائناً (object) يحتوي على url
       })
     });
 
