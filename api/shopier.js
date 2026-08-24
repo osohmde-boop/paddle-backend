@@ -11,14 +11,12 @@ export default async function handler(req, res) {
     return res.status(405).json({ message: 'يسمح بطلبات POST فقط' });
   }
 
-  const { totalAmount, orderId } = req.body; // هذا القادم هو بالدولار ($)
+  const { totalAmount, orderId } = req.body;
   const PAT = process.env.SHOPIER_PAT;
 
   try {
-    // 💱 تحويل السعر من الدولار إلى الليرة التركية 
-    // يمكنك تعديل الرقم 36 حسب سعر الصرف الحالي للدولار مقابل الليرة
     const exchangeRate = 36; 
-    const priceInTRY = Math.round(totalAmount * exchangeRate * 100) / 100; // تقريب لأقرب قرش
+    const priceInTRY = Math.round(totalAmount * exchangeRate * 100) / 100;
 
     const response = await fetch('https://api.shopier.com/v1/products', {
       method: 'POST',
@@ -29,10 +27,11 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         title: `YZ Store Siparişi - ${orderId} ($${totalAmount})`,
-        price: priceInTRY, // السعر بالليرة التركية بعد التحويل
+        price: priceInTRY,
         currency: 'TRY',
         stock: 1,
-        type: 'digital'
+        type: 'digital',
+        media: 'https://i.ibb.co/YT1RPZdx/image.png' // إضافة صورة المتجر لتجاوز شرط Shopier الإجباري
       })
     });
 
