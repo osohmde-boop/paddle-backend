@@ -31,7 +31,7 @@ export default async function handler(req, res) {
         currency: 'TRY',
         stock: 1,
         type: 'digital',
-        media: 'https://i.ibb.co/YT1RPZdx/image.png' // إضافة صورة المتجر لتجاوز شرط Shopier الإجباري
+        media: ['https://i.ibb.co/YT1RPZdx/image.png'] // تحويل الـ media إلى مصفوفة (Array) كما يطلب Shopier
       })
     });
 
