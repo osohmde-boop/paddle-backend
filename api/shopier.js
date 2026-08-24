@@ -33,6 +33,7 @@ export default async function handler(req, res) {
         },
         stock: 1,
         type: 'digital',
+        shippingPayer: 'seller',
         media: [
           {
             url: 'https://i.ibb.co/YT1RPZdx/image.png',
