@@ -15,7 +15,7 @@ export default async function handler(req, res) {
   const PAT = process.env.SHOPIER_PAT;
 
   try {
-    const exchangeRate = 36; 
+    const exchangeRate = 36;
     const priceInTRY = Math.round(totalAmount * exchangeRate * 100) / 100;
 
     const response = await fetch('https://api.shopier.com/v1/products', {
@@ -31,7 +31,12 @@ export default async function handler(req, res) {
         currency: 'TRY',
         stock: 1,
         type: 'digital',
-        media: [{ url: 'https://i.ibb.co/YT1RPZdx/image.png', type: 'image' }]
+        media: [
+          {
+            url: 'https://i.ibb.co/YT1RPZdx/image.png',
+            placement: 'cover'
+          }
+        ]
       })
     });
 
