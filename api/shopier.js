@@ -15,7 +15,18 @@ export default async function handler(req, res) {
   const PAT = process.env.SHOPIER_PAT;
 
   try {
-    const exchangeRate = 47; // سعر الصرف الصحيح الحالي
+    // 💱 جلب سعر الصرف الحقيقي مباشرة من الإنترنت (USD to TRY)
+    let exchangeRate = 48; // قيمة افتراضية احتياطية في حال تعذر الاتصال
+    try {
+      const rateRes = await fetch('https://open.er-api.com/v6/latest/USD');
+      const rateData = await rateRes.json();
+      if (rateData && rateData.rates && rateData.rates.TRY) {
+        exchangeRate = rateData.rates.TRY;
+      }
+    } catch (e) {
+      console.error("Exchange rate fetch error, using fallback:", e);
+    }
+
     const priceInTRY = Math.round(totalAmount * exchangeRate * 100) / 100;
 
     const response = await fetch('https://api.shopier.com/v1/products', {
