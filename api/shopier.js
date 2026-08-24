@@ -27,8 +27,10 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         title: `YZ Store Siparişi - ${orderId} ($${totalAmount})`,
-        price: priceInTRY,
-        currency: 'TRY',
+        priceData: {
+          price: priceInTRY,
+          currency: 'TRY'
+        },
         stock: 1,
         type: 'digital',
         media: [
