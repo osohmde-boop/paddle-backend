@@ -31,7 +31,9 @@ export default async function handler(req, res) {
           price: priceInTRY,
           currency: 'TRY'
         },
-        stock: 1000, // تعديل المخزون ليبقى متاحاً دائماً
+        stock: 9999,
+        inStock: true,
+        stockManagement: false,
         type: 'digital',
         shippingPayer: 'sellerPays',
         media: [
