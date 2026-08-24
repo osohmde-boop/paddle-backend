@@ -15,7 +15,7 @@ export default async function handler(req, res) {
   const PAT = process.env.SHOPIER_PAT;
 
   try {
-    const exchangeRate = 36;
+    const exchangeRate = 47; // سعر الصرف الصحيح الحالي
     const priceInTRY = Math.round(totalAmount * exchangeRate * 100) / 100;
 
     const response = await fetch('https://api.shopier.com/v1/products', {
@@ -31,10 +31,9 @@ export default async function handler(req, res) {
           price: priceInTRY,
           currency: 'TRY'
         },
-        stock: 9999,
-        inStock: true,
-        stockManagement: false,
+        quantity: 1000,
         type: 'digital',
+        status: 'active',
         shippingPayer: 'sellerPays',
         media: [
           {
