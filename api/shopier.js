@@ -1,5 +1,4 @@
 export default async function handler(req, res) {
-  // ترويسات السماح بالاتصال من أي موقع (CORS) لحل مشكلة Failed to fetch
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -8,17 +7,19 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
-  // السماح بطلبات POST فقط
   if (req.method !== 'POST') {
     return res.status(405).json({ message: 'يسمح بطلبات POST فقط' });
   }
 
-  // استلام إجمالي السلة ورقم الطلب من واجهة متجرك
-  const { totalAmount, orderId } = req.body;
+  const { totalAmount, orderId } = req.body; // هذا القادم هو بالدولار ($)
   const PAT = process.env.SHOPIER_PAT;
 
   try {
-    // إرسال طلب لإنشاء منتج مجمع في Shopier
+    // 💱 تحويل السعر من الدولار إلى الليرة التركية 
+    // يمكنك تعديل الرقم 36 حسب سعر الصرف الحالي للدولار مقابل الليرة
+    const exchangeRate = 36; 
+    const priceInTRY = Math.round(totalAmount * exchangeRate * 100) / 100; // تقريب لأقرب قرش
+
     const response = await fetch('https://api.shopier.com/v1/products', {
       method: 'POST',
       headers: {
@@ -27,8 +28,8 @@ export default async function handler(req, res) {
         'Accept': 'application/json'
       },
       body: JSON.stringify({
-        title: `YZ Store Siparişi - ${orderId}`,
-        price: totalAmount,
+        title: `YZ Store Siparişi - ${orderId} ($${totalAmount})`,
+        price: priceInTRY, // السعر بالليرة التركية بعد التحويل
         currency: 'TRY',
         stock: 1,
         type: 'digital'
@@ -37,7 +38,6 @@ export default async function handler(req, res) {
 
     const data = await response.json();
 
-    // إذا تم إنشاء المنتج بنجاح، سيقوم بإرجاع الـ ID الخاص به
     if (response.ok && data.id) {
       const checkoutUrl = `https://www.shopier.com/${data.id}`;
       return res.status(200).json({ url: checkoutUrl });
