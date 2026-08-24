@@ -34,7 +34,8 @@ export default async function handler(req, res) {
         media: [
           {
             url: 'https://i.ibb.co/YT1RPZdx/image.png',
-            placement: 'cover'
+            placement: 'cover',
+            type: 'image'
           }
         ]
       })
