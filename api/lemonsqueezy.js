@@ -1,4 +1,7 @@
+import crypto from 'crypto';
+
 export default async function handler(req, res) {
+  // إعدادات CORS للسماح لمتجرك بالاتصال بالسيرفر
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
@@ -7,29 +10,30 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const LEMONSQUEEZY_API_KEY = process.env.LEMONSQUEEZY_API_KEY || '';
-  const LEMONSQUEEZY_STORE_ID = process.env.LEMONSQUEEZY_STORE_ID || '';
+  // جلب مفاتيح Shopier من إعدادات Vercel
+  const SHOPIER_API_KEY = process.env.SHOPIER_API_KEY || '';
+  const SHOPIER_API_SECRET = process.env.SHOPIER_API_SECRET || '';
   const FIREBASE_DATABASE_URL = process.env.FIREBASE_DATABASE_URL || 'https://osman-70f42-default-rtdb.firebaseio.com';
 
-  if (!LEMONSQUEEZY_API_KEY || !LEMONSQUEEZY_STORE_ID) {
-    return res.status(500).json({ error: 'بيانات Lemon Squeezy غير معرفة في Vercel Environment Variables.' });
+  if (!SHOPIER_API_KEY || !SHOPIER_API_SECRET) {
+    return res.status(500).json({ error: 'مفاتيح Shopier غير معرفة في بيئة Vercel (Environment Variables).' });
   }
 
-  const { items, customerEmail, discountCode } = req.body || {};
+  const { items, customerEmail, customerName, customerPhone } = req.body || {};
 
   if (!Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: 'السلة فارغة.' });
   }
 
-  const email = typeof customerEmail === 'string' ? customerEmail.trim() : '';
-  if (!email || !email.includes('@')) {
-    return res.status(400).json({ error: 'البريد الإلكتروني غير صالح.' });
-  }
+  const email = typeof customerEmail === 'string' ? customerEmail.trim() : 'customer@yzstoreonline.com';
+  const name = customerName || 'YZ_Customer';
+  const phone = customerPhone || '05000000000';
 
   try {
-    const customPriceList = [];
-    let detectedVariantId = null;
+    let totalPrice = 0;
+    const productNames = [];
 
+    // جلب أسعار المنتجات من Firebase لضمان الأمان وعدم تلاعب العميل بالسعر
     for (const cartItem of items) {
       const productId = typeof cartItem?.productId === 'string' ? cartItem.productId.trim() : '';
       if (!productId) return res.status(400).json({ error: 'معرف المنتج غير صالح.' });
@@ -49,77 +53,71 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: `بيانات المنتج "${title}" غير صالحة.` });
       }
 
-      // القراءة من قواعد البيانات أو استخدام الرقم الافتراضي
-      if (product.variantId || product.variant_id) {
-        detectedVariantId = String(product.variantId || product.variant_id);
-      }
-
-      customPriceList.push({
-        name: title,
-        price: Math.round(price * 100)
-      });
+      const quantity = Number(cartItem.quantity) || 1;
+      totalPrice += (price * quantity);
+      productNames.push(`${title} (x${quantity})`);
     }
 
-    const totalCustomPrice = customPriceList.reduce((acc, curr) => acc + curr.price, 0);
+    // تجهيز بيانات Shopier
+    const totalOrderValue = totalPrice.toFixed(2); // السعر الإجمالي كـ String بمرتبتين عشريتين
+    const currency = '1'; // 1 = USD (دولار أمريكي), 0 = TRY (ليرة تركية)
+    const randomNr = Math.floor(Math.random() * 900000) + 100000;
+    const platformOrderId = `YZ-${Date.now()}`; // رقم طلب عشوائي لتتبعه
+    
+    // خوارزمية التشفير الإجبارية من Shopier
+    const dataString = randomNr.toString() + platformOrderId + totalOrderValue + currency;
+    const signature = crypto.createHmac('sha256', SHOPIER_API_SECRET).update(dataString).digest('base64');
 
-    // استخدام الرقم المكتشف أو الرقم الافتراضي 2047899
-    const finalVariantId = detectedVariantId || "2047899";
+    // توليد كود HTML (Form) ليتم حقنه في واجهة المتجر وتوجيه العميل تلقائياً
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head><title>Redirecting to Secure Payment...</title></head>
+      <body style="background-color: #070709; color: #fff; text-align: center; padding-top: 50px; font-family: sans-serif;">
+        <h3>جاري توجيهك لبوابة الدفع الآمنة...</h3>
+        <form id="shopier_form" method="post" action="https://www.shopier.com/ShowProduct/api_pay4.php">
+          <input type="hidden" name="API_key" value="${SHOPIER_API_KEY}">
+          <input type="hidden" name="website_index" value="1">
+          <input type="hidden" name="platform_order_id" value="${platformOrderId}">
+          <input type="hidden" name="product_name" value="${productNames.join(' + ')}">
+          <input type="hidden" name="product_type" value="1"> <!-- 1 = منتج رقمي (Digital) -->
+          <input type="hidden" name="buyer_name" value="${name}">
+          <input type="hidden" name="buyer_surname" value="Customer">
+          <input type="hidden" name="buyer_email" value="${email}">
+          <input type="hidden" name="buyer_account_age" value="0">
+          <input type="hidden" name="buyer_id_nr" value="0">
+          <input type="hidden" name="buyer_phone" value="${phone}">
+          
+          <input type="hidden" name="billing_address" value="YZ Store Digital Delivery">
+          <input type="hidden" name="billing_city" value="Istanbul">
+          <input type="hidden" name="billing_country" value="Turkey">
+          <input type="hidden" name="billing_postcode" value="34000">
+          <input type="hidden" name="shipping_address" value="YZ Store Digital Delivery">
+          <input type="hidden" name="shipping_city" value="Istanbul">
+          <input type="hidden" name="shipping_country" value="Turkey">
+          <input type="hidden" name="shipping_postcode" value="34000">
+          
+          <input type="hidden" name="total_order_value" value="${totalOrderValue}">
+          <input type="hidden" name="currency" value="${currency}">
+          <input type="hidden" name="platform" value="0">
+          <input type="hidden" name="is_in_frame" value="0">
+          <input type="hidden" name="current_language" value="1"> <!-- 1 = إنجليزي، 0 = تركي -->
+          <input type="hidden" name="modul_version" value="1.0.4">
+          <input type="hidden" name="random_nr" value="${randomNr}">
+          <input type="hidden" name="signature" value="${signature}">
+        </form>
+        <script>
+          document.getElementById('shopier_form').submit();
+        </script>
+      </body>
+      </html>
+    `;
 
-    const checkoutPayload = {
-      data: {
-        type: "checkouts",
-        attributes: {
-          custom_price: totalCustomPrice,
-          product_options: {
-            name: customPriceList.map(i => i.name).join(' + '),
-            description: "منتجات رقمية من YZ STORE",
-            receipt_button_text: "عرض الطلب",
-            redirect_url: "https://yzstoreonline.com"
-          },
-          checkout_data: {
-            email: email,
-            discount_code: discountCode || undefined
-          }
-        },
-        relationships: {
-          store: {
-            data: {
-              type: "stores",
-              id: String(LEMONSQUEEZY_STORE_ID)
-            }
-          },
-          variant: {
-            data: {
-              type: "variants",
-              id: String(finalVariantId)
-            }
-          }
-        }
-      }
-    };
-
-    const response = await fetch('https://api.lemonsqueezy.com/v1/checkouts', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${LEMONSQUEEZY_API_KEY}`,
-        'Content-Type': 'application/vnd.api+json',
-        'Accept': 'application/vnd.api+json'
-      },
-      body: JSON.stringify(checkoutPayload)
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      console.error('Lemon Squeezy API Error:', data);
-      return res.status(400).json({ error: data?.errors?.[0]?.detail || 'فشل إنشاء عملية الدفع.' });
-    }
-
-    const checkoutUrl = data?.data?.attributes?.url;
-    return res.status(200).json({ success: true, checkoutUrl });
+    // إرسال الكود كاستجابة ليقوم المتجر بتشغيله
+    return res.status(200).json({ htmlContent });
 
   } catch (error) {
-    console.error('Backend Error:', error);
-    return res.status(500).json({ error: error?.message || 'حدث خطأ في الخادم.' });
+    console.error('Shopier Backend Error:', error);
+    return res.status(500).json({ error: error?.message || 'حدث خطأ في خادم الدفع.' });
   }
 }
