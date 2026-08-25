@@ -12,11 +12,9 @@ export default async function handler(req, res) {
 
   const PAT = process.env.SHOPIER_PAT;
   const SHOP_SLUG = process.env.SHOPIER_SHOP_SLUG || 'yzstore0';
-  const CHECKOUT_PRODUCT_ID = process.env.SHOPIER_CHECKOUT_PRODUCT_ID;
   const FIREBASE_DATABASE_URL = process.env.FIREBASE_DATABASE_URL || 'https://osman-70f42-default-rtdb.firebaseio.com';
 
   if (!PAT) return res.status(500).json({ error: 'مفتاح Shopier (PAT) غير معرّف.' });
-  if (!CHECKOUT_PRODUCT_ID) return res.status(500).json({ error: 'رقم المنتج الثابت (SHOPIER_CHECKOUT_PRODUCT_ID) غير معرّف.' });
 
   const { items, discountCode } = req.body || {};
   if (!Array.isArray(items) || items.length === 0) {
@@ -26,7 +24,7 @@ export default async function handler(req, res) {
   const fbBase = FIREBASE_DATABASE_URL.replace(/\/$/, '');
 
   try {
-    // 1) حساب السعر الحقيقي من Firebase
+    // 1) حساب السعر الحقيقي من Firebase مباشرة بالسيرفر
     let totalUSD = 0;
     for (const cartItem of items) {
       const productId = typeof cartItem?.productId === 'string' ? cartItem.productId.trim() : '';
@@ -70,7 +68,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'مجموع الطلب غير صالح.' });
     }
 
-    // 3) تحويل لليرة
+    // 3) تحويل لليرة التركية
     let exchangeRate = 48;
     try {
       const rr = await fetch('https://open.er-api.com/v6/latest/USD');
@@ -78,49 +76,33 @@ export default async function handler(req, res) {
       if (rd?.rates?.TRY) exchangeRate = rd.rates.TRY;
     } catch (e) {}
 
-    const priceInTRY = Math.round(totalUSD * exchangeRate * 100) / 100;
+    const priceInTRY = (Math.round(totalUSD * exchangeRate * 100) / 100).toFixed(2);
     const orderId = `YZ-${Date.now()}`;
 
-    // 4) تحديث سعر المنتج الثابت فقط (بدون لمس المخزون)
+    // 4) إنشاء رابط دفع مباشر (Hosted Checkout) — يتخطى صفحة المنتج بالكامل
     const client = new ShopierApiClient({ pat: PAT });
-
-    const updateRes = await fetch(`https://api.shopier.com/v1/products/${CHECKOUT_PRODUCT_ID}`, {
-      method: 'PUT',
-      headers: {
-        'Authorization': `Bearer ${PAT}`,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      },
-      body: JSON.stringify({ priceData: { price: priceInTRY, currency: 'TRY' } })
-    });
-
-    if (!updateRes.ok) {
-      const errBody = await updateRes.json().catch(() => null);
-      return res.status(500).json({ error: 'تعذر تحديث السعر: ' + JSON.stringify(errBody) });
-    }
-
-    // 5) بناء صفحة دفع مباشرة لنفس المنتج الثابت (بدون إنشاء منتج جديد)
     const payments = new ShopierPaymentFlow({ client });
 
-    let checkoutHtml;
-    try {
-      checkoutHtml = payments.buildHostedCheckoutHtml({
-        productId: CHECKOUT_PRODUCT_ID,
-        shopSlug: SHOP_SLUG,
-        orderId
-      });
-    } catch (buildErr) {
-      return res.status(500).json({
-        error: 'buildHostedCheckoutHtml فشلت: ' + (buildErr?.message || JSON.stringify(buildErr))
-      });
-    }
+    const payment = await payments.createPaymentLink({
+      title: `YZ Store - ${orderId}`,
+      amount: priceInTRY,
+      currency: 'TRY',
+      imageUrl: 'https://i.ibb.co/YT1RPZdx/image.png',
+      orderId,
+      hostedCheckout: true,
+      shopSlug: SHOP_SLUG,
+      quantity: 10
+    });
 
-    if (!checkoutHtml) {
-      return res.status(500).json({ error: 'buildHostedCheckoutHtml رجعت فاضية.' });
+    if (!payment?.checkoutHtml) {
+      // نرجع الكائن كامل عشان نشوف الأسماء الحقيقية للحقول ونصلح فوراً
+      return res.status(500).json({
+        error: 'checkoutHtml غير موجود بالرد. البيانات الكاملة: ' + JSON.stringify(payment)
+      });
     }
 
     return res.status(200).json({
-      checkoutHtml,
+      checkoutHtml: payment.checkoutHtml,
       orderId,
       total: `$${totalUSD.toFixed(2)}`
     });
