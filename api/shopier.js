@@ -24,43 +24,57 @@ export default async function handler(req, res) {
   const fbBase = FIREBASE_DATABASE_URL.replace(/\/$/, '');
 
   try {
-    // 1) حساب السعر الحقيقي من Firebase مباشرة بالسيرفر
-    let totalUSD = 0;
-    for (const cartItem of items) {
+    // 1) حساب السعر الحقيقي بالتوازي لزيادة السرعة
+    const productPromises = items.map(async (cartItem) => {
       const productId = typeof cartItem?.productId === 'string' ? cartItem.productId.trim() : '';
-      if (!productId) return res.status(400).json({ error: 'معرف منتج غير صالح.' });
+      if (!productId) throw new Error('INVALID_PRODUCT_ID');
 
       const r = await fetch(`${fbBase}/products/${encodeURIComponent(productId)}.json`);
-      if (!r.ok) return res.status(500).json({ error: 'تعذر التحقق من بيانات المنتج.' });
+      if (!r.ok) throw new Error('FETCH_FAILED');
+
       const product = await r.json();
-      if (!product) return res.status(404).json({ error: 'أحد المنتجات لم يعد متوفراً.' });
+      if (!product) throw new Error('PRODUCT_NOT_FOUND');
 
       const price = Number(product.price);
-      if (!Number.isFinite(price) || price <= 0) {
-        return res.status(400).json({ error: 'بيانات منتج غير صالحة.' });
-      }
-      const quantity = Math.max(1, Number(cartItem.quantity) || 1);
-      totalUSD += price * quantity;
+      if (!Number.isFinite(price) || price <= 0) throw new Error('INVALID_PRICE');
+
+      const quantity = Math.max(1, Math.floor(Number(cartItem.quantity) || 1));
+      return price * quantity;
+    });
+
+    let itemPrices;
+    try {
+      itemPrices = await Promise.all(productPromises);
+    } catch (err) {
+      if (err.message === 'INVALID_PRODUCT_ID') return res.status(400).json({ error: 'معرف منتج غير صالح.' });
+      if (err.message === 'PRODUCT_NOT_FOUND') return res.status(404).json({ error: 'أحد المنتجات لم يعد متوفراً.' });
+      return res.status(400).json({ error: 'بيانات المنتج غير صالحة.' });
     }
+
+    let totalUSD = itemPrices.reduce((sum, itemPrice) => sum + itemPrice, 0);
 
     // 2) كود الخصم
     if (discountCode) {
-      const dr = await fetch(`${fbBase}/store_settings/discountCodes.json`);
-      if (dr.ok) {
-        const discounts = await dr.json();
-        if (discounts) {
-          const codeObj = Object.values(discounts).find(
-            d => String(d.code || '').toUpperCase() === String(discountCode).toUpperCase()
-          );
-          if (codeObj) {
-            const now = new Date();
-            const notExpired = !codeObj.expiresAt || new Date(codeObj.expiresAt) >= now;
-            const percentage = Number(codeObj.percentage);
-            if (notExpired && percentage > 0 && percentage <= 100) {
-              totalUSD -= totalUSD * (percentage / 100);
+      try {
+        const dr = await fetch(`${fbBase}/store_settings/discountCodes.json`);
+        if (dr.ok) {
+          const discounts = await dr.json();
+          if (discounts) {
+            const codeObj = Object.values(discounts).find(
+              d => String(d.code || '').toUpperCase() === String(discountCode).toUpperCase()
+            );
+            if (codeObj) {
+              const now = new Date();
+              const notExpired = !codeObj.expiresAt || new Date(codeObj.expiresAt) >= now;
+              const percentage = Number(codeObj.percentage);
+              if (notExpired && percentage > 0 && percentage <= 100) {
+                totalUSD -= totalUSD * (percentage / 100);
+              }
             }
           }
         }
+      } catch (e) {
+        console.warn('Discount check failed:', e);
       }
     }
 
@@ -77,38 +91,44 @@ export default async function handler(req, res) {
     } catch (e) {}
 
     const priceInTRY = (Math.round(totalUSD * exchangeRate * 100) / 100).toFixed(2);
-    const orderId = `YZ-${Date.now()}`;
+    // رقم طلب فريد لمنع التعارض
+    const orderId = `YZ-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
-    // 4) إنشاء رابط دفع مباشر (Hosted Checkout) — يتخطى صفحة المنتج بالكامل
+    // 4) إنشاء رابط دفع جديد بديناميكية كاملة
     const client = new ShopierApiClient({ pat: PAT });
     const payments = new ShopierPaymentFlow({ client });
 
     const payment = await payments.createPaymentLink({
-      title: `YZ Store - ${orderId}`,
+      title: `YZ Store - Order #${orderId}`,
       amount: priceInTRY,
       currency: 'TRY',
       imageUrl: 'https://i.ibb.co/YT1RPZdx/image.png',
       orderId,
       hostedCheckout: true,
       shopSlug: SHOP_SLUG,
-      quantity: 10
+      quantity: 1
     });
 
-    if (!payment?.checkoutHtml) {
-      // نرجع الكائن كامل عشان نشوف الأسماء الحقيقية للحقول ونصلح فوراً
+    // الـ SDK قد يُرجع checkoutHtml أو url مباشر حسب التحديث
+    const checkoutHtml = payment?.checkoutHtml;
+    const paymentUrl = payment?.url || payment?.paymentUrl;
+
+    if (!checkoutHtml && !paymentUrl) {
       return res.status(500).json({
-        error: 'checkoutHtml غير موجود بالرد. البيانات الكاملة: ' + JSON.stringify(payment)
+        error: 'تعذر الحصول على رابط الدفع من Shopier.',
+        rawResponse: payment
       });
     }
 
     return res.status(200).json({
-      checkoutHtml: payment.checkoutHtml,
+      checkoutHtml: checkoutHtml || null,
+      paymentUrl: paymentUrl || null,
       orderId,
       total: `$${totalUSD.toFixed(2)}`
     });
 
   } catch (error) {
     console.error('Server Error:', error);
-    return res.status(500).json({ error: (error?.message || 'unknown') + ' | ' + (error?.stack || '') });
+    return res.status(500).json({ error: error?.message || 'خطأ غير معروف في السيرفر' });
   }
 }
