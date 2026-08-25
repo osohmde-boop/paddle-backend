@@ -90,7 +90,8 @@ export default async function handler(req, res) {
       imageUrl: 'https://i.ibb.co/YT1RPZdx/image.png',
       orderId,
       hostedCheckout: true,
-      shopSlug: SHOP_SLUG
+      shopSlug: SHOP_SLUG,
+      quantity: 10
     });
 
     if (!payment?.checkoutHtml) {
