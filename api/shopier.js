@@ -93,6 +93,13 @@ export default async function handler(req, res) {
       shopSlug: SHOP_SLUG
     });
 
+    if (!payment?.checkoutHtml) {
+      // نرجع الكائن كامل عشان نشوف الأسماء الحقيقية للحقول ونصلح فوراً
+      return res.status(500).json({
+        error: 'checkoutHtml غير موجود بالرد. البيانات الكاملة: ' + JSON.stringify(payment)
+      });
+    }
+
     return res.status(200).json({
       checkoutHtml: payment.checkoutHtml,
       orderId,
@@ -101,6 +108,6 @@ export default async function handler(req, res) {
 
   } catch (error) {
     console.error('Server Error:', error);
-    return res.status(500).json({ error: error.message || 'خطأ داخلي في السيرفر.' });
+    return res.status(500).json({ error: (error?.message || 'unknown') + ' | ' + (error?.stack || '') });
   }
 }
