@@ -1,6 +1,8 @@
 export default async function handler(req, res) {
+    // السماح بطلب POST فقط
     if (req.method !== 'POST') {
-        return res.status(405).json({ error: 'Method not allowed' });
+        res.setHeader('Allow', ['POST']);
+        return res.status(405).json({ error: `Method ${req.method} Not Allowed` });
     }
 
     try {
@@ -8,14 +10,14 @@ export default async function handler(req, res) {
         const shopierPat = process.env.SHOPIER_PAT;
 
         if (!shopierPat) {
-            return res.status(500).json({ error: 'Shopier PAT is not configured' });
+            return res.status(500).json({ error: 'Shopier PAT is not configured in environment variables' });
         }
 
-        // سعر الصرف أو قيمة المبلغ بالليرة التركية
-        const exchangeRate = 36; 
-        const totalTry = (totalAmount * exchangeRate).toFixed(2);
+        // سعر الصرف وحساب المبلغ بالليرة التركية
+        const exchangeRate = 36;
+        const totalTry = (Number(totalAmount) * exchangeRate).toFixed(2);
 
-        // إرسال طلب إنشاء رابط دفع خاص بالمنتج/السعر المحدد عبر شوبير API
+        // إرسال الطلب إلى شوبير لإنشاء رابط دفع خاص بالمنتج/السعر المحدد
         const shopierRes = await fetch('https://www.shopier.com/api/v1/checkout', {
             method: 'POST',
             headers: {
@@ -31,10 +33,10 @@ export default async function handler(req, res) {
 
         const data = await shopierRes.json();
 
-        if (shopierRes.ok && data.payment_url) {
-            return res.status(200).json({ url: data.payment_url });
+        if (shopierRes.ok && (data.payment_url || data.url)) {
+            return res.status(200).json({ url: data.payment_url || data.url });
         } else {
-            throw new Error(data.message || 'فشل توليد رابط الدفع من شوبير');
+            throw new Error(data.message || data.error || 'فشل توليد رابط الدفع من شوبير');
         }
     } catch (error) {
         return res.status(500).json({ error: error.message });
