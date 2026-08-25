@@ -23,13 +23,13 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'السلة فارغة.' });
   }
 
+  const fbBase = FIREBASE_DATABASE_URL.replace(/\/$/, '');
+
   try {
     // ================================================================
     // 1) حساب السعر الحقيقي من Firebase مباشرة بالسيرفر
-    //    (لا نثق إطلاقاً بأي مبلغ قادم من المتصفح — نقطة أمان حرجة)
     // ================================================================
     let totalUSD = 0;
-    const productNames = [];
 
     for (const cartItem of items) {
       const productId = typeof cartItem?.productId === 'string' ? cartItem.productId.trim() : '';
@@ -37,7 +37,7 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: 'معرف منتج غير صالح بالسلة.' });
       }
 
-      const firebaseUrl = `${FIREBASE_DATABASE_URL.replace(/\/$/, '')}/products/${encodeURIComponent(productId)}.json`;
+      const firebaseUrl = `${fbBase}/products/${encodeURIComponent(productId)}.json`;
       const firebaseResponse = await fetch(firebaseUrl, { headers: { 'Accept': 'application/json' } });
 
       if (!firebaseResponse.ok) {
@@ -58,14 +58,13 @@ export default async function handler(req, res) {
 
       const quantity = Math.max(1, Number(cartItem.quantity) || 1);
       totalUSD += price * quantity;
-      productNames.push(`${title} x${quantity}`);
     }
 
     // ================================================================
-    // 2) تطبيق كود الخصم (إن وُجد) — من السيرفر أيضاً
+    // 2) تطبيق كود الخصم (إن وُجد)
     // ================================================================
     if (discountCode) {
-      const discountUrl = `${FIREBASE_DATABASE_URL.replace(/\/$/, '')}/store_settings/discountCodes.json`;
+      const discountUrl = `${fbBase}/store_settings/discountCodes.json`;
       const discountRes = await fetch(discountUrl);
       if (discountRes.ok) {
         const discounts = await discountRes.json();
@@ -90,9 +89,9 @@ export default async function handler(req, res) {
     }
 
     // ================================================================
-    // 3) تحويل المبلغ لليرة التركية (Shopier PAT REST API يتطلب TRY)
+    // 3) تحويل المبلغ لليرة التركية
     // ================================================================
-    let exchangeRate = 48; // قيمة احتياطية فقط في حال تعذّر الاتصال بمصدر السعر
+    let exchangeRate = 48;
     try {
       const rateRes = await fetch('https://open.er-api.com/v6/latest/USD');
       const rateData = await rateRes.json();
@@ -105,38 +104,80 @@ export default async function handler(req, res) {
     const orderId = `YZ-${Date.now()}`;
 
     // ================================================================
-    // 4) إنشاء "منتج" على Shopier عبر PAT للحصول على رابط دفع
+    // 4) الحصول على منتج "الدفع" الثابت — إنشاؤه مرة واحدة فقط إن لم يكن موجوداً
     // ================================================================
-    const response = await fetch('https://api.shopier.com/v1/products', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${PAT}`,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      },
-      body: JSON.stringify({
-        title: `YZ Store - ${orderId}`,
-        priceData: { price: priceInTRY, currency: 'TRY' },
-        quantity: 1,
-        type: 'digital',
-        status: 'active',
-        shippingPayer: 'sellerPays',
-        media: [{ url: 'https://i.ibb.co/YT1RPZdx/image.png', placement: 1, type: 'image' }]
-      })
-    });
+    let checkoutProductId = null;
 
-    const data = await response.json();
+    const savedIdRes = await fetch(`${fbBase}/store_settings/checkoutProductId.json`);
+    if (savedIdRes.ok) {
+      const savedId = await savedIdRes.json();
+      if (savedId) checkoutProductId = String(savedId);
+    }
 
-    if (response.ok && data?.id) {
-      return res.status(200).json({
-        url: `https://www.shopier.com/${data.id}`,
-        orderId,
-        total: `$${totalUSD.toFixed(2)}`
+    const productPayload = {
+      title: 'YZ Store - Checkout',
+      priceData: { price: priceInTRY, currency: 'TRY' },
+      quantity: 5000,
+      type: 'digital',
+      status: 'active',
+      shippingPayer: 'sellerPays',
+      media: [{ url: 'https://i.ibb.co/YT1RPZdx/image.png', placement: 1, type: 'image' }]
+    };
+
+    let shopierData;
+
+    if (checkoutProductId) {
+      // منتج موجود مسبقاً — فقط نحدّث سعره ليطابق الطلب الحالي
+      const updateRes = await fetch(`https://api.shopier.com/v1/products/${checkoutProductId}`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${PAT}`,
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify(productPayload)
+      });
+      shopierData = await updateRes.json();
+
+      if (!updateRes.ok) {
+        console.error('Shopier update error, will try creating a new one:', shopierData);
+        checkoutProductId = null; // نتراجع وننشئ واحد جديد بالأسفل
+      }
+    }
+
+    if (!checkoutProductId) {
+      // أول مرة إطلاقاً — ننشئ المنتج الثابت مرة واحدة فقط
+      const createRes = await fetch('https://api.shopier.com/v1/products', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${PAT}`,
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify(productPayload)
+      });
+      shopierData = await createRes.json();
+
+      if (!createRes.ok || !shopierData?.id) {
+        console.error('Shopier create error:', shopierData);
+        return res.status(500).json({ error: shopierData?.message || 'تعذر توليد رابط الدفع من Shopier.' });
+      }
+
+      checkoutProductId = String(shopierData.id);
+
+      // نحفظ الرقم بقاعدة البيانات عشان كل عملية دفع قادمة تستخدم نفس المنتج
+      await fetch(`${fbBase}/store_settings/checkoutProductId.json`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(checkoutProductId)
       });
     }
 
-    console.error('Shopier API Error:', data);
-    return res.status(500).json({ error: data?.message || 'تعذر توليد رابط الدفع من Shopier.' });
+    return res.status(200).json({
+      url: `https://www.shopier.com/${checkoutProductId}`,
+      orderId,
+      total: `$${totalUSD.toFixed(2)}`
+    });
 
   } catch (error) {
     console.error('Server Error:', error);
