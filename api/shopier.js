@@ -10,14 +10,10 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'يسمح بطلبات POST فقط' });
   }
 
-  // 🔴 ضع مفتاح PAT الخاص بك هنا
+  // 🔴 مفتاح PAT الخاص بك تم إدراجه هنا مباشرة
   const PAT = process.env.SHOPIER_PAT || 'a546ad5b6351f8a39496c8ecbfa2edd44dfb08fa1fe25f38531662c9ecc086dd';
   const SHOP_SLUG = process.env.SHOPIER_SHOP_SLUG || 'yzstore0';
   const FIREBASE_DATABASE_URL = process.env.FIREBASE_DATABASE_URL || 'https://osman-70f42-default-rtdb.firebaseio.com';
-
-  if (!PAT) {
-    return res.status(500).json({ error: 'مفتاح Shopier (PAT) غير معرّف.' });
-  }
 
   const { items, discountCode } = req.body || {};
   if (!Array.isArray(items) || items.length === 0) {
@@ -27,12 +23,11 @@ export default async function handler(req, res) {
   const fbBase = FIREBASE_DATABASE_URL.replace(/\/$/, '');
 
   try {
-    // 1) جلب المنتج الثابت أو إنشائه تلقائياً لمرة واحدة
+    // 1) البحث عن منتج موجود أو إنشاء منتج جديد لمرة واحدة
     let checkoutProductId = process.env.SHOPIER_CHECKOUT_PRODUCT_ID;
 
     if (!checkoutProductId) {
       try {
-        // البحث عن المنتجات الموجودة في شوبير
         const listRes = await fetch('https://api.shopier.com/v1/products?limit=1', {
           headers: { 'Authorization': `Bearer ${PAT}`, 'Accept': 'application/json' }
         });
@@ -43,12 +38,9 @@ export default async function handler(req, res) {
             checkoutProductId = productsList[0].id;
           }
         }
-      } catch (e) {
-        console.warn('Failed to fetch existing product, creating a new dummy product...');
-      }
+      } catch (e) {}
     }
 
-    // إذا لم يجد أي منتج متوفر في الحساب، ينشئ منتج واحد ثابت تلقائياً
     if (!checkoutProductId) {
       const createDummyRes = await fetch('https://api.shopier.com/v1/products', {
         method: 'POST',
@@ -69,31 +61,23 @@ export default async function handler(req, res) {
         const dummyData = await createDummyRes.json();
         checkoutProductId = dummyData.id;
       } else {
-        return res.status(500).json({ error: 'تعذر الحصول على منتج ثابت أو إنشائه في Shopier.' });
+        return res.status(500).json({ error: 'تعذر الاتصال بـ Shopier لإنشاء المنتج.' });
       }
     }
 
-    // 2) حساب مجموع السعر من Firebase
+    // 2) حساب المجموع من Firebase
     let totalUSD = 0;
     for (const cartItem of items) {
       const productId = typeof cartItem?.productId === 'string' ? cartItem.productId.trim() : '';
       if (!productId) return res.status(400).json({ error: 'معرف منتج غير صالح.' });
 
-      let r;
-      try {
-        r = await fetch(`${fbBase}/products/${encodeURIComponent(productId)}.json`);
-      } catch (e) {
-        return res.status(502).json({ error: 'تعذر الاتصال بقاعدة بيانات Firebase.' });
-      }
+      const r = await fetch(`${fbBase}/products/${encodeURIComponent(productId)}.json`);
       if (!r.ok) return res.status(502).json({ error: 'تعذر التحقق من بيانات المنتج.' });
 
       const product = await r.json().catch(() => null);
-      if (!product) return res.status(404).json({ error: `المنتج (${productId}) لم يعد متوفراً.` });
+      if (!product) return res.status(404).json({ error: `المنتج لم يعد متوفراً.` });
 
       const price = Number(product.price);
-      if (!Number.isFinite(price) || price <= 0) {
-        return res.status(400).json({ error: `بيانات المنتج (${productId}) غير صالحة.` });
-      }
       const quantity = Math.max(1, Math.floor(Number(cartItem.quantity)) || 1);
       totalUSD += price * quantity;
     }
@@ -118,16 +102,10 @@ export default async function handler(req, res) {
             }
           }
         }
-      } catch (e) {
-        console.error('Discount error ignored:', e);
-      }
+      } catch (e) {}
     }
 
-    if (!Number.isFinite(totalUSD) || totalUSD <= 0) {
-      return res.status(400).json({ error: 'مجموع الطلب غير صالح.' });
-    }
-
-    // 4) تحويل لليرة التركية
+    // 4) سعر الصرف
     let exchangeRate = 48;
     try {
       const rr = await fetch('https://open.er-api.com/v6/latest/USD');
@@ -139,27 +117,18 @@ export default async function handler(req, res) {
     const orderId = `YZ-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
     // 5) تحديث سعر المنتج الثابت
-    const updateRes = await fetch(`https://api.shopier.com/v1/products/${checkoutProductId}`, {
+    await fetch(`https://api.shopier.com/v1/products/${checkoutProductId}`, {
       method: 'PUT',
       headers: {
         'Authorization': `Bearer ${PAT}`,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        priceData: {
-          price: priceInTRY,
-          currency: 'TRY'
-        }
+        priceData: { price: priceInTRY, currency: 'TRY' }
       })
     });
 
-    if (!updateRes.ok) {
-      const errBody = await updateRes.json().catch(() => null);
-      return res.status(502).json({ error: 'تعذر تحديث السعر في Shopier', details: errBody });
-    }
-
-    // 6) بناء صفحة الدفع المباشرة
+    // 6) بناء صفحة الدفع
     const client = new ShopierApiClient({ pat: PAT });
     const payments = new ShopierPaymentFlow({ client });
 
@@ -172,7 +141,6 @@ export default async function handler(req, res) {
     return res.status(200).json({ checkoutHtml, orderId, total: `$${totalUSD.toFixed(2)}` });
 
   } catch (error) {
-    console.error('Server Error:', error);
     return res.status(500).json({ error: error?.message || 'Server Error' });
   }
 }
