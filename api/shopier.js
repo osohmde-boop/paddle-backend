@@ -107,7 +107,12 @@ export default async function handler(req, res) {
 
         // 4) إنشاء رابط/نموذج الدفع عبر Shopier
         const client = new ShopierApiClient({ pat: PAT });
-        const payments = new ShopierPaymentFlow({ client });
+        // شوبيير يطلب صورة (imageUrl أو media) إلزاميًا لأي رابط دفع منتج — نستخدم شعار المتجر كصورة افتراضية
+        // بما إن الطلب الواحد ممكن يحتوي أكثر من منتج بصور مختلفة (فاتورة موحّدة وليست منتج واحد بعينه)
+        const payments = new ShopierPaymentFlow({
+            client,
+            defaultImageUrl: 'https://i.ibb.co/YT1RPZdx/image.png',
+        });
 
         const payment = await payments.createPaymentLink({
             title: `YZ Store Order ${orderId}`,
