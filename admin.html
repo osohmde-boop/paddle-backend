@@ -449,7 +449,7 @@
         function initDiscounts() {
             onValue(ref(db, 'store_settings/discountCodes'), s => {
                 allDiscounts = [];
-                s.forEach(d => allDiscounts.push({ ...d.val(), key: d.key }));
+                s.forEach(d => { allDiscounts.push({ ...d.val(), key: d.key }); });
                 renderDiscounts();
             });
         }
