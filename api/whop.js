@@ -9,7 +9,6 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") {
     return res.status(204).end();
   }
-
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed. Use POST." });
   }
@@ -19,14 +18,19 @@ export default async function handler(req, res) {
     const items = Array.isArray(body.items) ? body.items : [];
     const currency = (body.currency || "usd").toLowerCase();
     const redirectUrl = body.redirectUrl || undefined;
+    // هذه الحقول يرسلها index.html مع كل طلب (orderId, uid, customerEmail) —
+    // نمررها كـ metadata مع جلسة Whop حتى يمكن مطابقة الدفعة بالطلب لاحقاً
+    // (مثلاً من Webhook خاص بـ Whop يُحدّث الحالة إلى "active").
+    const orderId = body.orderId || undefined;
+    const uid = body.uid || undefined;
+    const customerEmail = body.customerEmail || undefined;
 
     if (items.length === 0) {
       return res.status(400).json({ error: "سلة التسوق فارغة." });
     }
 
-    // 1) حساب المجموع من Firebase
+    // 1) حساب المجموع من Firebase (مصدر الحقيقة، وليس من قيمة يرسلها المتصفح)
     const total = await computeCartTotalFromFirebase(items);
-
     if (!(total > 0)) {
       return res.status(400).json({ error: "تعذّر حساب إجمالي صحيح للسلة من المنتجات." });
     }
@@ -50,6 +54,9 @@ export default async function handler(req, res) {
       },
       metadata: {
         source: "website-cart",
+        order_id: orderId,
+        uid,
+        customer_email: customerEmail,
         items: JSON.stringify(items).slice(0, 500),
       },
       ...(redirectUrl ? { redirect_url: redirectUrl } : {}),
@@ -79,12 +86,11 @@ export default async function handler(req, res) {
       console.error("Whop API error status:", whopRes.status, "Body:", whopData);
       return res.status(whopRes.status).json({
         error: whopData.error || whopData.message || "فشل إنشاء جلسة الدفع في Whop.",
-        details: whopData
+        details: whopData,
       });
     }
 
     const checkoutUrl = whopData.purchase_url || (whopData.id ? `https://whop.com/checkout/${whopData.id}/` : null);
-
     if (!checkoutUrl) {
       return res.status(502).json({ error: "لم يتم استلام رابط الدفع من Whop.", whop_body: whopData });
     }
@@ -95,7 +101,6 @@ export default async function handler(req, res) {
       amount: Math.round(total * 100) / 100,
       currency,
     });
-
   } catch (err) {
     console.error("api/whop.js fatal error:", err);
     return res.status(500).json({ error: "خطأ داخلي في الخادم.", detail: String(err?.message || err) });
