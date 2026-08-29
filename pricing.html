@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+    <meta charset="UTF-8">
+    <title>Pricing | YZ STORE</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <meta name="description" content="Explore YZ Store pricing for streaming alerts, subscriptions, and custom design services for content creators and gamers. Instant delivery, secure payment via Shopier.">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://yzstoreonline.com/pricing.html">
+
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="YZ STORE">
+    <meta property="og:title" content="Pricing | YZ STORE">
+    <meta property="og:description" content="Explore YZ Store pricing for streaming alerts, subscriptions, and custom design services for content creators and gamers. Instant delivery, secure payment via Shopier.">
+    <meta property="og:image" content="https://i.ibb.co/YT1RPZdx/image.png">
+    <meta property="og:url" content="https://yzstoreonline.com/pricing.html">
+
+    <link rel="icon" type="image/png" href="https://i.ibb.co/YT1RPZdx/image.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body { background: #070709; color: #f4f4f5; font-family: 'Inter', sans-serif; }
+        .glass { background: rgba(18,18,24,.7); border: 1px solid rgba(255,255,255,.08); }
+        .card { background: linear-gradient(180deg, rgba(24,24,32,.8) 0%, rgba(12,12,16,.95) 100%); border: 1px solid rgba(255,255,255,.07); transition: transform 0.3s ease, border-color 0.3s ease; }
+        .card:hover { transform: translateY(-4px); border-color: rgba(239, 68, 68, 0.4); }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col justify-between">
+    <div class="max-w-5xl mx-auto px-6 py-16 w-full">
+        <a href="index.html" class="inline-flex items-center gap-2 mb-10 hover:opacity-80 transition">
+            <img src="https://i.ibb.co/YT1RPZdx/image.png" class="h-9 w-auto">
+            <span class="font-black text-lg text-white">YZ <span class="text-red-500">STORE</span></span>
+        </a>
+
+        <h1 class="text-3xl font-black mb-2">Pricing & Products</h1>
+        <p class="text-gray-400 text-sm mb-10">All prices are in USD. Products are digital assets and delivered instantly after payment, processed securely by Paddle.com.</p>
+
+        <div id="pricing-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            <p class="text-gray-500 col-span-full">Loading products...</p>
+        </div>
+    </div>
+
+    <footer class="max-w-5xl mx-auto px-6 pb-12 w-full">
+        <div class="pt-8 border-t border-white/5 flex flex-wrap justify-between items-center gap-4 text-xs text-gray-500">
+            <div>
+                © 2026 YZ STORE. All rights reserved.
+            </div>
+            <div class="flex flex-wrap gap-4">
+                <a href="terms.html" class="hover:text-white transition">Terms of Service</a>
+                <a href="privacy.html" class="hover:text-white transition">Privacy Policy</a>
+                <a href="refund.html" class="hover:text-white transition">Refund Policy</a>
+                <a href="index.html" class="hover:text-red-400 transition font-bold text-gray-300">Back to Store →</a>
+            </div>
+        </div>
+    </footer>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.5.0/firebase-app.js";
+        import { getDatabase, ref, onValue } from "https://www.gstatic.com/firebasejs/10.5.0/firebase-database.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyCt5H1t5dqUxileT88DqkIT5WRSGx45Lps",
+            authDomain: "osman-70f42.firebaseapp.com",
+            databaseURL: "https://osman-70f42-default-rtdb.firebaseio.com",
+            projectId: "osman-70f42",
+            storageBucket: "osman-70f42.firebasestorage.app"
+        };
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+        const FALLBACK_IMAGE = "https://i.ibb.co/YT1RPZdx/image.png";
+
+        const escapeHtml = (str) => {
+            if (str === null || str === undefined) return '';
+            return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        };
+        const safeUrl = (url) => {
+            try { const u = new URL(url, window.location.href); if (u.protocol === 'http:' || u.protocol === 'https:') return u.href; } catch (e) {}
+            return FALLBACK_IMAGE;
+        };
+
+        onValue(ref(db, "products"), s => {
+            const grid = document.getElementById('pricing-grid');
+            const items = [];
+            
+            if (s.exists()) {
+                s.forEach(p => {
+                    const val = p.val();
+                    if (val && typeof val === 'object' && val.title !== undefined) {
+                        items.push({ ...val, key: p.key });
+                    }
+                });
+            }
+
+            if (items.length === 0) {
+                grid.innerHTML = `<p class="text-gray-500 col-span-full">No products available right now.</p>`;
+                return;
+            }
+
+            grid.innerHTML = items.map(p => `
+                <div class="card rounded-2xl overflow-hidden flex flex-col justify-between">
+                    <div>
+                        <div class="h-44 overflow-hidden bg-black/50">
+                            <img src="${safeUrl(p.image)}" onerror="this.src='${FALLBACK_IMAGE}'" class="w-full h-full object-cover">
+                        </div>
+                        <div class="p-5">
+                            <h3 class="font-bold text-white text-base mb-1 truncate">${escapeHtml(p.title)}</h3>
+                            <p class="text-[11px] text-gray-500 mb-4">${p.category === 'alerts' ? 'Alerts & Overlays' : p.category === 'packages' ? 'Packages & Subscriptions' : 'Digital Service'}</p>
+                            <p class="text-red-500 font-black text-2xl">$${Number(p.price).toFixed(2)}</p>
+                        </div>
+                    </div>
+                    <div class="px-5 pb-5">
+                        <a href="index.html" class="w-full inline-flex items-center justify-center gap-2 bg-white/5 hover:bg-red-600 hover:text-white text-gray-300 py-2.5 rounded-xl text-xs font-bold transition">
+                            <i class="fa fa-shopping-cart"></i> Buy in Store
+                        </a>
+                    </div>
+                </div>`).join('');
+        }, () => {
+            document.getElementById('pricing-grid').innerHTML = `<p class="text-gray-500 col-span-full">Could not load pricing right now. Please refresh.</p>`;
+        });
+    </script>
+</body>
+</html>
