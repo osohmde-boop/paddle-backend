@@ -1,17 +1,4 @@
-// نقطة الدفع الخلفية (Serverless Function) لـ Shopier.
-// يجب نشر هذا المسار على منصة تدعم Serverless/Edge Functions (مثل Vercel أو Netlify) —
-// GitHub Pages لا يستطيع تشغيل هذا الملف لأنه استضافة ثابتة (static hosting) فقط.
-//
-// المتغيرات البيئية المطلوبة (تُضبط من إعدادات المشروع بالمنصة، وليس هنا بالكود):
-//   SHOPIER_PAT        - مفتاح Shopier السري (Personal Access Token)
-//   SHOPIER_SHOP_SLUG   - معرف المتجر بشوبير
-//   FIREBASE_DATABASE_URL - رابط Firebase Realtime Database (اختياري، له قيمة افتراضية أدناه)
-//
-// ⚠️ لا تضع أي مفتاح سري كقيمة افتراضية بالكود أبداً — المستودع عام (public)،
-// وأي مفتاح يوضع هنا كنص ثابت يصبح مرئياً لأي شخص يفتح المستودع على GitHub.
-
-import { ShopierApiClient, ShopierPaymentFlow } from '@nopeion/shopier';
-
+// نقطة الدفع الخلفية (Serverless Function) لـ Whop عبر Vercel
 export default async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -22,14 +9,12 @@ export default async function handler(req, res) {
         return res.status(405).json({ error: 'يسمح بطلبات POST فقط' });
     }
 
-    const PAT = process.env.SHOPIER_PAT;
-    const SHOP_SLUG = process.env.SHOPIER_SHOP_SLUG;
+    const WHOP_API_KEY = process.env.WHOP_API_KEY;
     const FIREBASE_DATABASE_URL = process.env.FIREBASE_DATABASE_URL || 'https://osman-70f42-default-rtdb.firebaseio.com';
 
-    if (!PAT || !SHOP_SLUG) {
-        // فشل واضح بدل الرجوع لقيمة افتراضية غير آمنة
-        console.error('SHOPIER_PAT أو SHOPIER_SHOP_SLUG غير مضبوطين في متغيرات البيئة.');
-        return res.status(500).json({ error: 'إعداد الدفع غير مكتمل على السيرفر. تواصل مع الدعم.' });
+    if (!WHOP_API_KEY) {
+        console.error('WHOP_API_KEY غير مضبوط في متغيرات البيئة.');
+        return res.status(500).json({ error: 'إعداد الدفع غير مكتمل على السيرفر (مفتاح Whop مفقود).' });
     }
 
     const { items, discountCode } = req.body || {};
@@ -40,8 +25,10 @@ export default async function handler(req, res) {
     const fbBase = FIREBASE_DATABASE_URL.replace(/\/$/, '');
 
     try {
-        // 1) حساب المجموع من Firebase مباشرة (لا نثق بأي سعر يصل من المتصفح)
+        // 1) جلب بيانات المنتج وحساب الإجمالي من Firebase
         let totalUSD = 0;
+        let mainPlanId = null;
+
         for (const cartItem of items) {
             const productId = typeof cartItem?.productId === 'string' ? cartItem.productId.trim() : '';
             if (!productId) return res.status(400).json({ error: 'معرف منتج غير صالح.' });
@@ -52,6 +39,10 @@ export default async function handler(req, res) {
             const product = await r.json().catch(() => null);
             if (!product) return res.status(404).json({ error: 'المنتج لم يعد متوفراً.' });
 
+            if (!mainPlanId && product.whopPlanId) {
+                mainPlanId = product.whopPlanId;
+            }
+
             const price = Number(product.price);
             if (!Number.isFinite(price) || price < 0) {
                 return res.status(500).json({ error: 'بيانات سعر المنتج غير صالحة.' });
@@ -61,7 +52,7 @@ export default async function handler(req, res) {
             totalUSD += price * quantity;
         }
 
-        // 2) كود الخصم (اختياري)
+        // 2) تطبيق كود الخصم (إن وجد)
         if (discountCode) {
             try {
                 const dr = await fetch(`${fbBase}/store_settings/discountCodes.json`);
@@ -82,7 +73,7 @@ export default async function handler(req, res) {
                     }
                 }
             } catch (e) {
-                console.error('discount code lookup failed:', e);
+                console.error('فشل التحقق من كود الخصم:', e);
             }
         }
 
@@ -90,46 +81,46 @@ export default async function handler(req, res) {
             return res.status(400).json({ error: 'قيمة الطلب غير صالحة.' });
         }
 
-        // 3) سعر الصرف USD -> TRY (شوبير يستقبل الدفع بالليرة التركية)
-        let exchangeRate = 48; // قيمة احتياطية تقريبية إذا فشل جلب السعر الحي — يُستحسن مراجعتها دورياً
-        try {
-            const rr = await fetch('https://open.er-api.com/v6/latest/USD');
-            if (rr.ok) {
-                const rd = await rr.json();
-                if (rd?.rates?.TRY) exchangeRate = rd.rates.TRY;
-            }
-        } catch (e) {
-            console.error('exchange rate fetch failed, using fallback:', e);
-        }
-
-        const priceInTRY = Math.round(totalUSD * exchangeRate * 100) / 100;
         const orderId = `YZ-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
-        // 4) إنشاء رابط/نموذج الدفع عبر Shopier
-        const client = new ShopierApiClient({ pat: PAT });
-        // شوبيير يطلب صورة (imageUrl أو media) إلزاميًا لأي رابط دفع منتج — نستخدم شعار المتجر كصورة افتراضية
-        // بما إن الطلب الواحد ممكن يحتوي أكثر من منتج بصور مختلفة (فاتورة موحّدة وليست منتج واحد بعينه)
-        const payments = new ShopierPaymentFlow({
-            client,
-            defaultImageUrl: 'https://i.ibb.co/YT1RPZdx/image.png',
+        // 3) التواصل مع API الخاص بـ Whop لإنشاء إعداد الدفع (Checkout Configuration)
+        const whopPayload = {
+            plan: mainPlanId ? { id: mainPlanId } : {
+                initial_price: totalUSD,
+                plan_type: "one_time"
+            },
+            metadata: {
+                order_id: orderId
+            }
+        };
+
+        const whopRes = await fetch('https://api.whop.com/api/v1/checkout_configurations', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${WHOP_API_KEY}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(whopPayload)
         });
 
-        const payment = await payments.createPaymentLink({
-            title: `YZ Store Order ${orderId}`,
-            amount: priceInTRY.toFixed(2),
-            currency: 'TRY',
-            orderId,
-            hostedCheckout: true,
-            shopSlug: SHOP_SLUG,
-        });
+        const whopData = await whopRes.json();
+
+        if (!whopRes.ok) {
+            console.error('Whop API Error:', whopData);
+            return res.status(500).json({ error: whopData.message || 'فشل التنسيق مع بوابة Whop.' });
+        }
+
+        // رابط التوجه لصفحة دفع Whop
+        const checkoutUrl = whopData.purchase_url || whopData.url || `https://whop.com/checkout/${whopData.id}`;
 
         return res.status(200).json({
-            checkoutHtml: payment.checkoutHtml,
+            checkoutUrl,
             orderId,
-            total: `$${totalUSD.toFixed(2)}`,
+            total: `$${totalUSD.toFixed(2)}`
         });
+
     } catch (error) {
-        console.error('shopier checkout error:', error);
+        console.error('Whop Checkout Error:', error);
         return res.status(500).json({ error: error?.message || 'خطأ غير متوقع بالسيرفر.' });
     }
 }
