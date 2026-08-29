@@ -1150,36 +1150,51 @@
             btn.disabled = true;
             btn.innerText = '...';
             try {
-                const snap = await get(ref(db, `coupons/${code}`));
-                if (!snap.exists()) {
+                // أكواد الخصم تُدار من لوحة التحكم وتُخزَّن في store_settings/discountCodes
+                // (نفس المسار والحقول اللي تستخدمها لوحة التحكم: code, percentage, expiresAt, usageLimit)
+                // — وليس بمسار منفصل، حتى تبقى الأكواد التي ينشئها الأدمن متوافقة تماماً مع الواجهة.
+                const snap = await get(ref(db, 'store_settings/discountCodes'));
+                let matched = null;
+                if (snap.exists()) {
+                    snap.forEach(childSnap => {
+                        const v = childSnap.val();
+                        if (v && String(v.code || '').toUpperCase() === code) {
+                            matched = { ...v, key: childSnap.key };
+                        }
+                    });
+                }
+                if (!matched) {
                     appliedCoupon = null;
                     showCouponFeedback('كود الخصم غير صحيح.', 'error');
                     updateCartUI();
                     return;
                 }
-                const data = snap.val();
                 const now = Date.now();
-                if (data.active === false) {
-                    showCouponFeedback('هذا الكود لم يعد فعّالاً.', 'error');
+                if (matched.expiresAt) {
+                    const expiryTime = new Date(`${matched.expiresAt}T23:59:59`).getTime();
+                    if (Number.isFinite(expiryTime) && now > expiryTime) {
+                        showCouponFeedback('انتهت صلاحية هذا الكود.', 'error');
+                        return;
+                    }
+                }
+                const usageLimit = matched.usageLimit != null ? Number(matched.usageLimit) : null;
+                const usedCount = Number(matched.usedCount) || 0;
+                if (Number.isFinite(usageLimit) && usageLimit > 0 && usedCount >= usageLimit) {
+                    showCouponFeedback('تم استنفاد الحد الأقصى لاستخدام هذا الكود.', 'error');
                     return;
                 }
-                if (data.expiresAt && new Date(data.expiresAt).getTime() < now) {
-                    showCouponFeedback('انتهت صلاحية هذا الكود.', 'error');
-                    return;
-                }
-                const sub = cart.reduce((a, it) => a + (Number(it.price) || 0) * it.qty, 0);
-                if (data.minTotal && sub < Number(data.minTotal)) {
-                    showCouponFeedback(`هذا الكود يتطلب حداً أدنى للطلب $${Number(data.minTotal).toFixed(2)}.`, 'error');
+                const percentage = Number(matched.percentage);
+                if (!Number.isFinite(percentage) || percentage <= 0) {
+                    showCouponFeedback('كود الخصم غير صالح.', 'error');
                     return;
                 }
                 appliedCoupon = {
                     code,
-                    type: data.type === 'fixed' ? 'fixed' : 'percent',
-                    value: Number(data.value) || 0,
-                    minTotal: data.minTotal ? Number(data.minTotal) : null
+                    type: 'percent',
+                    value: percentage,
+                    minTotal: null
                 };
-                const label = appliedCoupon.type === 'percent' ? `${appliedCoupon.value}%` : `$${appliedCoupon.value.toFixed(2)}`;
-                showCouponFeedback(`تم تطبيق الكود بنجاح (خصم ${label}) ✓`, 'success');
+                showCouponFeedback(`تم تطبيق الكود بنجاح (خصم ${percentage}%) ✓`, 'success');
                 updateCartUI();
             } catch (err) {
                 console.error('applyCoupon error:', err);
