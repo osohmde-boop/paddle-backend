@@ -39,12 +39,16 @@ export default async function handler(req, res) {
     // 1b) تحقق من كود الخصم (إن وُجد) من Firebase مباشرة — لا نثق أبداً بأي مبلغ
     //     خصم يرسله المتصفح، حتى لو كان العميل قد تحقق من الكود بنفسه في الواجهة.
     let discount = 0;
+    let couponKey = null;
+    let couponUsedCount = 0;
     if (couponCode) {
       const couponResult = await validateCouponFromFirebase(couponCode, subtotal);
       if (!couponResult.valid) {
         return res.status(400).json({ error: couponResult.reason || "كود الخصم غير صالح." });
       }
       discount = couponResult.discount;
+      couponKey = couponResult.key;
+      couponUsedCount = couponResult.usedCount;
     }
     const total = Math.max(subtotal - discount, 0);
     if (!(total > 0)) {
@@ -111,6 +115,11 @@ export default async function handler(req, res) {
       return res.status(502).json({ error: "لم يتم استلام رابط الدفع من Whop.", whop_body: whopData });
     }
 
+    if (couponCode && couponKey) {
+      // best-effort فقط — لا يوقف أو يبطئ الاستجابة بشكل ملحوظ، ولا يفشل الطلب لو تعذّر
+      await bumpCouponUsage(couponKey, couponUsedCount);
+    }
+
     return res.status(200).json({
       url: checkoutUrl,
       id: whopData.id,
@@ -154,65 +163,89 @@ async function computeCartTotalFromFirebase(items) {
 
 // يتحقق من كود الخصم مباشرة من Firebase (مصدر الحقيقة) — لا نثق أبداً
 // بأي قيمة خصم يرسلها المتصفح، حتى لو كان قد تحقق من الكود بنفسه مسبقاً
-// عبر قراءة سريعة من الواجهة الأمامية. الشكل المتوقع في قاعدة البيانات:
-//   coupons/<CODE> = {
-//     type: "percent" | "fixed",   // نوع الخصم
-//     value: number,               // 10 = 10% إذا percent، أو 10 = $10 إذا fixed
-//     active: true|false,          // اختياري، افتراضي true
-//     expiresAt: "2026-12-31" | timestamp (ms) | ISO string,  // اختياري
-//     minTotal: number             // اختياري: أقل مجموع فرعي مطلوب لتفعيل الكود
-//   }
+// عبر قراءة سريعة من الواجهة الأمامية.
+//
+// ملاحظة مهمة: أكواد الخصم تُدار من لوحة التحكم (admin.html → "أكواد الخصم")
+// وتُخزَّن في store_settings/discountCodes (بمفاتيح عشوائية من push())، وكل عنصر
+// فيها بهذا الشكل: { code: "YZ10", percentage: 20, expiresAt: "2026-08-31"|null,
+// usageLimit: number|null, usedCount?: number }. نستخدم هذا المسار بالذات (وليس
+// مساراً منفصلاً) حتى تبقى الأكواد التي ينشئها الأدمن متوافقة تماماً مع السيرفر.
 async function validateCouponFromFirebase(couponCode, subtotal) {
   const dbUrl = process.env.FIREBASE_DB_URL || "https://osman-70f42-default-rtdb.firebaseio.com";
   const secretParam = process.env.FIREBASE_DB_SECRET ? `?auth=${process.env.FIREBASE_DB_SECRET}` : "";
-  const url = `${dbUrl.replace(/\/$/, "")}/coupons/${encodeURIComponent(couponCode)}.json${secretParam}`;
+  const url = `${dbUrl.replace(/\/$/, "")}/store_settings/discountCodes.json${secretParam}`;
 
-  let data = null;
+  let all = null;
   try {
     const r = await fetch(url);
     if (r.ok) {
-      data = await r.json();
+      all = await r.json();
     }
   } catch (err) {
     console.error("validateCouponFromFirebase fetch error:", err);
   }
 
-  if (!data || typeof data !== "object") {
+  if (!all || typeof all !== "object") {
     return { valid: false, discount: 0, reason: "كود الخصم غير موجود." };
   }
 
-  if (data.active === false) {
-    return { valid: false, discount: 0, reason: "كود الخصم لم يعد فعالاً." };
+  let matchKey = null;
+  let matchData = null;
+  for (const [key, entry] of Object.entries(all)) {
+    if (entry && typeof entry === "object" && String(entry.code || "").toUpperCase() === couponCode) {
+      matchKey = key;
+      matchData = entry;
+      break;
+    }
   }
 
-  if (data.expiresAt) {
-    const expiryTime = new Date(data.expiresAt).getTime();
+  if (!matchData) {
+    return { valid: false, discount: 0, reason: "كود الخصم غير موجود." };
+  }
+
+  if (matchData.expiresAt) {
+    const expiryTime = new Date(`${matchData.expiresAt}T23:59:59`).getTime();
     if (Number.isFinite(expiryTime) && Date.now() > expiryTime) {
       return { valid: false, discount: 0, reason: "انتهت صلاحية كود الخصم." };
     }
   }
 
-  const minTotal = Number(data.minTotal);
-  if (Number.isFinite(minTotal) && minTotal > 0 && subtotal < minTotal) {
-    return {
-      valid: false,
-      discount: 0,
-      reason: `هذا الكود يتطلب حداً أدنى للطلب قدره $${minTotal.toFixed(2)}.`,
-    };
+  const usageLimit = matchData.usageLimit != null ? Number(matchData.usageLimit) : null;
+  const usedCount = Number(matchData.usedCount) || 0;
+  if (Number.isFinite(usageLimit) && usageLimit > 0 && usedCount >= usageLimit) {
+    return { valid: false, discount: 0, reason: "تم استنفاد الحد الأقصى لاستخدام هذا الكود." };
   }
 
-  const type = data.type === "fixed" ? "fixed" : "percent";
-  const value = Number(data.value);
-  if (!Number.isFinite(value) || value <= 0) {
+  const percentage = Number(matchData.percentage);
+  if (!Number.isFinite(percentage) || percentage <= 0) {
     return { valid: false, discount: 0, reason: "كود الخصم غير صالح." };
   }
 
-  let discount = type === "percent" ? (subtotal * value) / 100 : value;
+  let discount = (subtotal * percentage) / 100;
   discount = Math.max(0, Math.min(discount, subtotal));
 
   if (!(discount > 0)) {
     return { valid: false, discount: 0, reason: "كود الخصم غير صالح." };
   }
 
-  return { valid: true, discount };
+  return { valid: true, discount, key: matchKey, usedCount };
+}
+
+// تحديث best-effort لعدّاد الاستخدام بعد إنشاء جلسة دفع ناجحة — يعمل فقط إذا كان
+// FIREBASE_DB_SECRET (Legacy Database Secret) معرّفاً، لأنه يحتاج صلاحية كتابة
+// تتجاوز قواعد الأمان (store_settings.write محصورة بحساب الأدمن). إذا لم يكن
+// السر معرّفاً، تُتجاهل هذه الخطوة بصمت ولا تؤثر إطلاقاً على إتمام الدفع.
+async function bumpCouponUsage(key, usedCount) {
+  if (!key || !process.env.FIREBASE_DB_SECRET) return;
+  const dbUrl = process.env.FIREBASE_DB_URL || "https://osman-70f42-default-rtdb.firebaseio.com";
+  const url = `${dbUrl.replace(/\/$/, "")}/store_settings/discountCodes/${encodeURIComponent(key)}/usedCount.json?auth=${process.env.FIREBASE_DB_SECRET}`;
+  try {
+    await fetch(url, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify((usedCount || 0) + 1),
+    });
+  } catch (err) {
+    console.warn("bumpCouponUsage failed (non-fatal):", err);
+  }
 }
